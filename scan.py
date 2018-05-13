@@ -2,6 +2,7 @@
 # python scan.py --image images/page.jpg
 
 # import the necessary packages
+from fpdf import FPDF
 from pyimagesearch.transform import four_point_transform
 from skimage.filters import threshold_local
 import numpy as np
@@ -10,68 +11,83 @@ import cv2
 import imutils
 
 # construct the argument parser and parse the arguments
-ap = argparse.ArgumentParser()
-ap.add_argument("-i", "--image", required = True,
-	help = "Path to the image to be scanned")
-args = vars(ap.parse_args())
+#ap = argparse.ArgumentParser()
+#ap.add_argument("-i", "--image", required = True,
+#	help = "Path to the image to be scanned")
+#args = vars(ap.parse_args())
 
-# load the image and compute the ratio of the old height
-# to the new height, clone it, and resize it
-image = cv2.imread(args["image"])
-ratio = image.shape[0] / 500.0
-orig = image.copy()
-image = imutils.resize(image, height = 500)
+class ImageToPDF():
+    """Convert a set of images into a pdf of one image per page"""
 
-# convert the image to grayscale, blur it, and find edges
-# in the image
-gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-gray = cv2.GaussianBlur(gray, (5, 5), 0)
-edged = cv2.Canny(gray, 75, 200)
+    def __init__(self, image):
+        """Run all functions to produce pdf"""
+        warped = self.format_image(image)
+        self.save_png(warped)
+        self.save_pdf('output/output.png')
 
-# show the original image and the edge detected image
-print("STEP 1: Edge Detection")
-cv2.imshow("Image", image)
-cv2.imshow("Edged", edged)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+    def format_image(self, image): 
+        # load the image and compute the ratio of the old height
+        # to the new height, clone it, and resize it
+        orig = cv2.imread(image)
+        #ratio = orig.shape[0] / 500.0
+        #image = imutils.resize(orig, height = 500)
 
-# find the contours in the edged image, keeping only the
-# largest ones, and initialize the screen contour
-cnts = cv2.findContours(edged.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-cnts = cnts[0] if imutils.is_cv2() else cnts[1]
-cnts = sorted(cnts, key = cv2.contourArea, reverse = True)[:5]
+        gray = self.grayscale(image)
+        blurred = self.blur(gray)
+        edged = cv2.Canny(blurred, 75, 200)
 
-# loop over the contours
-for c in cnts:
-	# approximate the contour
-	peri = cv2.arcLength(c, True)
-	approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+        # find the contours in the edged image, keeping only the
+        # largest ones, and initialize the screen contour
+        screenCnt = self.contour(edged)
 
-	# if our approximated contour has four points, then we
-	# can assume that we have found our screen
-	if len(approx) == 4:
-		screenCnt = approx
-		break
+        # apply the four point transform to obtain a top-down
+        # view of the original image
+        warped = four_point_transform(orig, screenCnt.reshape(4, 2) * ratio)
 
-# show the contour (outline) of the piece of paper
-print("STEP 2: Find contours of paper")
-cv2.drawContours(image, [screenCnt], -1, (0, 255, 0), 2)
-cv2.imshow("Outline", image)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+        # convert the warped image to grayscale, then threshold it
+        # to give it that 'black and white' paper effect
+        warped = self.grayscale(warped)
+        warped = self.threshold(warped)
 
-# apply the four point transform to obtain a top-down
-# view of the original image
-warped = four_point_transform(orig, screenCnt.reshape(4, 2) * ratio)
+        return warped
 
-# convert the warped image to grayscale, then threshold it
-# to give it that 'black and white' paper effect
-warped = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-T = threshold_local(warped, 11, offset = 10, method = "gaussian")
-warped = (warped > T).astype("uint8") * 255
+    def grayscale(self, image):
+        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-# show the original and scanned images
-print("STEP 3: Apply perspective transform")
-cv2.imshow("Original", imutils.resize(orig, height = 650))
-cv2.imshow("Scanned", imutils.resize(warped, height = 650))
-cv2.waitKey(0)
+    def blur(self, image):
+        return cv2.GaussianBlur(image, (5, 5), 0)
+
+    def threshold(self, image):
+        T = threshold_local(image, 11, offset = 10, method = "gaussian")
+        return (image > T).astype("uint8") * 255
+
+    def contour(self, image):
+        cnts = cv2.findContours(image.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        cnts = cnts[0] if imutils.is_cv2() else cnts[1]
+        cnts = sorted(cnts, key = cv2.contourArea, reverse = True)[:5]
+
+        # loop over the contours
+        for c in cnts:
+            # approximate the contour
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+
+            # if our approximated contour has four points, then we
+            # can assume that we have found our screen
+            if len(approx) == 4:
+                screenCnt = approx
+                break
+
+        return screenCnt
+
+    def save_png(self, image):
+        # write image to file
+        cv2.imwrite('output/output.png', image)
+
+    def save_pdf(self, image):
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.image(image, 1, 1, 208, 295)
+        pdf.output('output/output.pdf', 'F')
+
+conv = ImageToPDF('images/receipt.jpg')
